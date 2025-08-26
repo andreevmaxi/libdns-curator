@@ -49,7 +49,7 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 }
 
 // AppendRecords adds records to the zone. It returns the records that were added.
-func (p *QratorProvider) AppendRecords(ctx context.Context, crs []certmagic.CertificateResource) error {
+func (p *Provider) AppendRecords(ctx context.Context, crs []certmagic.CertificateResource) error {
 	for _, cr := range crs {
 		// certmagic.CertificateResource хранит данные вот так:
 		// cr.CertificatePEM  -> []byte PEM сертификата
