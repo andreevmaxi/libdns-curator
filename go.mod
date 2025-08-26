@@ -1,4 +1,4 @@
-module github.com/libdns/template
+module github.com/andreevmaxi/libdns-curator
 
 go 1.18
 
