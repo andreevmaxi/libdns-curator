@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/libdns/libdns"
+	"github.com/caddyserver/certmagic"
 )
 
 type Provider struct {
@@ -48,50 +49,56 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 }
 
 // AppendRecords adds records to the zone. It returns the records that were added.
-func (p *QratorProvider) AppendRecords(ctx context.Context, certPEM, keyPEM string) error {
-	req := map[string]interface{}{
-		"method": "certrequest_upload",
-		"params": []string{
-			certPEM,
-			keyPEM,
-		},
-		"id": 1,
-	}
+func (p *QratorProvider) AppendRecords(ctx context.Context, crs []certmagic.CertificateResource) error {
+	for _, cr := range crs {
+		// certmagic.CertificateResource хранит данные вот так:
+		// cr.CertificatePEM  -> []byte PEM сертификата
+		// cr.PrivateKeyPEM   -> []byte PEM приватного ключа
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
+		req := map[string]interface{}{
+			"method": "certrequest_upload",
+			"params": []string{
+				string(cr.CertificatePEM),
+				string(cr.PrivateKeyPEM),
+			},
+			"id": 1,
+		}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/request/client/1", p.APIBase), bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Qrator-Auth", p.APIKey)
+		body, err := json.Marshal(req)
+		if err != nil {
+			return fmt.Errorf("marshal request failed: %w", err)
+		}
 
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/request/client/1", p.APIBase), bytes.NewBuffer(body))
+		if err != nil {
+			return fmt.Errorf("create request failed: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("X-Qrator-Auth", p.APIKey)
 
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(b))
-	}
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+		defer resp.Body.Close()
 
-	var result struct {
-		Result interface{} `json:"result"`
-		Error  interface{} `json:"error"`
-		ID     int         `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
-	}
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(b))
+		}
 
-	if result.Error != nil {
-		return fmt.Errorf("API error: %+v", result.Error)
+		var result struct {
+			Result interface{} `json:"result"`
+			Error  interface{} `json:"error"`
+			ID     int         `json:"id"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return fmt.Errorf("decode response failed: %w", err)
+		}
+
+		if result.Error != nil {
+			return fmt.Errorf("API error: %+v", result.Error)
+		}
 	}
 
 	return nil
