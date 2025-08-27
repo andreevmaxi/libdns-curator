@@ -1,25 +1,21 @@
-// Package libdnstemplate implements a DNS record management client compatible
-// with the libdns interfaces for <PROVIDER NAME>. TODO: This package is a
-// template only. Customize all godocs for actual implementation.
 package libdnscurator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"bytes"
 	"io"
-	"strings"
+	"net/http"
+	"time"
 
 	"github.com/libdns/libdns"
-	"github.com/caddyserver/certmagic"
 )
 
 type Provider struct {
-	APIToken string `json:"api_token,omitempty"` 
-	APIBase  string `json:"api_base,omitempty"`  
-	
+	APIToken string `json:"api_token,omitempty"`
+	APIBase  string `json:"api_base,omitempty"`
+
 	client *http.Client
 }
 
@@ -31,92 +27,80 @@ func (p *Provider) ensureClient() {
 
 func (p *Provider) ensureDefaults() {
 	if p.APIBase == "" {
-		p.APIBase = "https://api.qrator.net/"
+		p.APIBase = "https://api.qrator.net"
 	}
 }
 
-// структура для API-запросов
-type dnsRecord struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
-	Data string `json:"data"`
-	TTL  int    `json:"ttl"`
-}
-
-// GetRecords lists all the records in the zone.
+// GetRecords (not implemented yet)
 func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-// AppendRecords adds records to the zone. It returns the records that were added.
-func (p *Provider) AppendRecords(ctx context.Context, certPEM, keyPEM string) error {
+// AppendRecords -> используем certrequest_upload
+func (p *Provider) AppendRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
+	p.ensureClient()
+	p.ensureDefaults()
+
+	if len(recs) < 2 {
+		return nil, fmt.Errorf("need at least 2 records: cert + key")
+	}
+
+	certPEM := recs[0].Value
+	keyPEM := recs[1].Value
+
 	req := map[string]interface{}{
 		"method": "certrequest_upload",
-		"params": []string{
-			certPEM,
-			keyPEM,
-		},
-		"id": 1,
+		"params": []string{certPEM, keyPEM},
+		"id":     1,
 	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return nil, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/request/client/1", p.APIBase), bytes.NewBuffer(body))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Qrator-Auth", p.APIKey)
+	httpReq.Header.Set("X-Qrator-Auth", p.APIToken)
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("qrator API error: %s", string(b))
 	}
 
-	var result struct {
-		Result interface{} `json:"result"`
-		Error  interface{} `json:"error"`
-		ID     int         `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if result.Error != nil {
-		return fmt.Errorf("API error: %+v", result.Error)
-	}
-
-	return nil
+	// Вернём recs, т.к. они "добавлены"
+	return recs, nil
 }
 
-// SetRecords sets the records in the zone, either by updating existing records or creating new ones.
-// It returns the updated records.
+// SetRecords (not implemented yet)
 func (p *Provider) SetRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-// DeleteRecords deletes the specified records from the zone. It returns the records that were deleted.
+// DeleteRecords -> certificate_remove
 func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
+	p.ensureClient()
+	p.ensureDefaults()
+
 	var deleted []libdns.Record
 
 	for _, rec := range recs {
-		// у нас rec.ID будет содержать ID сертификата (например, 302 из примера)
-		if rec.ID == "" {
-			return nil, fmt.Errorf("record ID required for deletion")
+		if rec.Value == "" {
+			return nil, fmt.Errorf("record Value required (certificate ID)")
 		}
 
 		payload := map[string]interface{}{
 			"method": "certificate_remove",
-			"params": []interface{}{rec.ID},
+			"params": []interface{}{rec.Value},
 			"id":     1,
 		}
 
@@ -125,15 +109,14 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns
 			return nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Provider.APIBase+"/request/client/1", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIBase+"/request/client/1", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
-
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Qrator-Auth", p.Provider.APIToken)
+		req.Header.Set("X-Qrator-Auth", p.APIToken)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := p.client.Do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -157,3 +140,4 @@ var (
 	_ libdns.RecordSetter   = (*Provider)(nil)
 	_ libdns.RecordDeleter  = (*Provider)(nil)
 )
+
